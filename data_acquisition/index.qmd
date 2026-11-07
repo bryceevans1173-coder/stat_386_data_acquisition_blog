@@ -1,0 +1,135 @@
+---
+title: "Data Acquisition Blog"
+author: "Bryson Evans"
+---
+
+## Introduction
+
+Football games often are decided by a few pivotal plays. Sometimes, the decision made by the coach has a great influence on the outcome of these pivotal plays. A lot of the time, this decision comes on 4th down. In football, 4th down is the last attempt that an offense has to gain the necessary yardage to keep their scoring attempt alive. If they don't get the necessary yardage, they give the ball back to the other team in an unfavorable position. Because of this, it is risky to attempt another play on this down. As a form of risk mitigation, a team can punt the ball away or attempt a field goal. In our study, we want to research how different coaches manage this risk, who is better at it than others, and how much managing risk properly on 4th down affects winning. 
+
+## Motivating Question
+
+How to professional football coaches mitigate risk on 4th down, given the situation such as field position, team performance, personnel, distance, etc?
+
+## Data Gathering Ethics
+
+These data were gathered from an detailed database at Pro Football Focus, a company recently acquired by TeamWorks. The API key to access this data is exclusive to select B2B partners, such as BYU's football team. The general manager of the team gave us permission to use this specific data for our project, but due to the terms and conditions of this api key, we cannot publish the data on any public area, such as github. Also, we practiced good api stewardship by structuring the script so that it did not make a high volume of requests in a short amount of time.
+
+## Steps for Data Gathering with PFF
+
+With the PFF API key, there is first a "login" step, where we need to exchange the API key for a jwt token, which can then be used to gather the data. We can do this with the requests library in python:
+
+```python
+r = requests.post(
+        f"{BASE_URL}/auth/login",
+        headers={"x-api-key": API_KEY, "Content-Type": "application/json"},
+    )
+```
+
+It is important to note that the API key is not hard-coded into the script. Instead, we keep it in a separate .env file, and then reference it with:
+
+```python
+load_dotenv()
+```
+This also helps us prevent uploading the API key to github.
+
+The response contains the limited-time jwt token that we then use to fetch the data. When working with an API, we need to specify the endpoint that we are hitting. For the data we need in our project, we use:
+
+```python
+url = f"{BASE_URL}/v1/open_exchange/{LEAGUE}/{season}/plays"
+```
+
+As you can see, we get to specify which league and season we want data for. In our case, we specified that we wanted the NFL for the 2023-2025 seasons. Once we received the data from PFF as json objects, we converted them to data frames, and then saved each, one per year, as csv's in our repo. 
+
+Next, we needed to format these csv's into one data set that is ready for analysis. We combined them, filtered them to include only fourth down plays, and then created a column called "go_for_it" that uses several criteria to determine when a team attempts a fourth down play, or takes the less risky option. We needed to be mindful of pre-snap penalties and other situational indicators that would skew our results. 
+
+## EDA Highlights
+
+
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+plays = pd.read_csv('data_complete.csv')
+```
+
+First, let's get a feel for how often teams "go for it" on 4th down. When we say "go for it", we are referring to the risker move of running a normal play to try and get the necessary yardage on the final attempt. 
+
+```{python}
+counts = plays["go_for_it"].value_counts().rename({0: "Punt / FG", 1: "Go for it"})
+ax = counts.plot(kind="bar", figsize=(5, 4), color=["gray", "steelblue"])
+ax.set_title("4th-down decisions")
+ax.set_ylabel("Plays")
+plt.show()
+```
+
+As we can see here, our data set contains about 12000 examples of teams taking the safer option of a punt/field goal, and about 4000 examples of teams going for it. This means there is approximately a 25% chance that a coach rolls the dice on any given fourth down. 
+
+```{python}
+ax = plays["distance"].clip(upper=20).plot(
+    kind="hist", bins=20, figsize=(8, 4), color="steelblue"
+)
+ax.set_title("Yards to go on 4th down (capped at 20)")
+ax.set_xlabel("Distance")
+plt.tight_layout()
+plt.show()
+```
+
+We can see the yardage required to obtain on fourth down can vary widely, with the most common being a short-yardage situation, and quite a long tail representing scenarios where the coach almost certainly punted the ball. How does distance affect the probability that a coach attempts a fourth down play?
+
+```{python}
+def rate_bar(series_rate, title, xlabel, ylabel="Go-for-it rate", rotate=0):
+    ax = series_rate.plot(kind="bar", figsize=(8, 4), color="steelblue")
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(0, min(1, series_rate.max() * 1.15))
+    plt.tight_layout()
+    plt.show()
+
+dist_bins = pd.cut(
+    plays["distance"],
+    bins=[0, 1, 3, 6, 10, 100],
+    labels=["1", "2-3", "4-6", "7-10", "11+"],
+)
+rate_bar(
+    plays.groupby(dist_bins, observed=True)["go_for_it"].mean(),
+    "Go-for-it rate by yards to go",
+    "Yards to go",
+)
+```
+
+Here we can see another interesting pattern. Going for it on fourth and 1 is very tempting, and we see a sharp dropoff once the distance is 2 or 3 yards. This is interesting because according to [StatRankings](https://statrankings.com/nfl/teams/offense/yards-per-play), the median yards per play for an NFL team is 5.3. Therefore, the probability that a team obtains the first down is much higher than the 40% chance that a coach attempts a fourth and 2 or 3, and the 20% chance that a coach attempts a fourth and 4-6. What if we take into account what quarter it is?
+
+```{python}
+rate_bar(
+    plays.groupby("quarter")["go_for_it"].mean(),
+    "Go-for-it rate by quarter",
+    "Quarter",
+)
+```
+
+Here we can see that coaches are fairly conservative for the first 3 quarters, but in the 4th quarter, or 5th (overtime), they become more aggressive. This is probably more out of necessity, since a team that is running out of time trying to overcome a deficit is less likely to care about the risk of giving the ball back to the opposing team with favorable field position. Finally, we wanted to see if certain teams are more aggressive than others in the last 3 years. 
+
+```{python}
+team = plays.groupby("offense")["go_for_it"].agg(["mean", "count"])
+team = team[team["count"] >= 30].sort_values("mean")
+ax = team["mean"].plot(kind="barh", figsize=(8, 9), color="steelblue")
+ax.set_title("Go-for-it rate by offense (min 30 plays)")
+ax.set_xlabel("Go-for-it rate")
+ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.0%}"))
+plt.tight_layout()
+plt.show()
+```
+
+Here we can see some evidence that some coaches are more aggressive than others. You may know that Dan Campbell, the head coach of the Detroit Lions, famously loves to go for it on fourth down, and we can see that reflected in this bar graph. Other teams like Houston does not, which also makes sense because they have an excellent defense and can sometimes struggle on offense. 
+
+## Links to Further Information
+
+PFF offers a wide range of NFL statistics, and the ones in this blog can be found with their premium site [here](https://premium.pff.com/nfl)
+
+For more information about the analytics behind Dan Campbell's aggressive playcalling, visit [detroitsportsnation](https://detroitsportsnation.com/dan-campbell-fourth-down-analytics-packers/ddrysdale/detroit-lions/10/26/2026/502756/)
+
+## Link to My Repo
+
+[Bryson Evans Repo](https://github.com/bryceevans1173-coder/data_acquisition)
