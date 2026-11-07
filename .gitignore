@@ -1,8 +1,0 @@
-.venv/
-__pycache__/
-.env
-.env.*
-!.env.example
-data_acquisition/_site/
-data_acquisition/.quarto/
-data_acquisition/data_complete.csv 
